@@ -1,5 +1,5 @@
 import express from "express";
-import { MongoClient, ObjectId } from "mongodb";
+import { MongoClient, MongoServerError, ObjectId } from "mongodb";
 import * as dotenv from 'dotenv';
 dotenv.config()
 
@@ -26,7 +26,7 @@ app.get("/", function (request, response) {
 });
 
 // api to create rooms
-app.post("/createroom", async function (request, response) {
+app.post("/createRoom", async function (request, response) {
     const data = request.body;
     const { seats_available, amenities, room_name, price } = request.body;
 
@@ -38,56 +38,171 @@ app.post("/createroom", async function (request, response) {
     }
 });
 
-// api to book rooms
-app.post("/bookroom", async function ( request, response) {
-  const data = request.body
-  const { id, start_time, end_time, booking_date} = request.body;
-  data.booking_date = new Date(booking_date);
-  data.start_time = new Date(booking_date + "T" + start_time + ":00.000Z");
-  data.end_time = new Date(booking_date + "T" + end_time + ":00.000Z");
-  data.booking_status = "booked";
 
-  let isroombooked = await client.db("hallbooking")
-                                 .collection("booked_rooms")
-                                 .find({
-                                    $and : [
+app.post("/bookRoom", async function (request, response) {
+    const data = request.body
+    const { id, start_time, end_time, booking_date } = request.body
+
+    const checkRoom = await client.db("hallbooking")
+                              .collection("booked_rooms")
+                              .find({
+                                $and:[
+                                  {"id" : id},
+                                  {"booking_date" : booking_date},
+                                  {
+                                    $or:[
                                       {
-                                        $or : [
-                                          {
-                                            $and : [
-                                              { start_time : { $lte : new Date(data.start_time)}},
-                                              { end_time : { $gte : new Date(data.start_time)}}
-                                            ]
-                                          },
-                                          {
-                                            $and : [
-                                              { start_time : { $lte : new Date(data.end_time)}},
-                                              { end_time : { $gte : new Date(data.end_time)}}
-                                            ]
-                                          }
+                                        $and:[
+                                          { start_time : { $lte: start_time }},
+                                          { end_time : { $gte: start_time }}
                                         ]
                                       },
-                                      { id : id }
+                                      {
+                                        $and:[
+                                          { start_time: { $lte: end_time} },
+                                          { end_time: { $gte: end_time} }
+                                        ]
+                                      }
                                     ]
-                                 }).toArray()
+                                  }
+                                ]
+                              }).toArray();
 
-  if(isroombooked === 0){
-    let result = await client
-                       .db("hallbooking")
-                       .collection("booked_rooms")
-                       .insertOne(data)
+    if(checkRoom.length === 0){
+    const result = await client.db("hallbooking").collection("booked_rooms").insertOne(data);
 
-    let updateresult = await client 
-                              .db("hallbooking")
-                              .collection("rooms")
-                              .updateOne(
-                                { _id : ObjectId(id)},
-                                { $set : { booking_status : "Booked"}}
-                              )
-    response.send(result);
-  }else {
-    response.status(400).send("Room has been booked for this time slot.");
-  }
-});
+    const updatedResult = await client.db("hallbooking")
+                                .collection("rooms")
+                                .updateOne({ _id:ObjectId(id) },{$set:{booking_status : "booked"}});
+
+    response.send(result)
+    }else{
+      response.status(400).send("room already booked for this slot")
+    }
+})
+
+
+app.get("/listAllRooms", async function(request, response) {
+    
+    let query = [
+      {
+        $addFields : { room_id: { $toString: "$_id" } }
+      },
+      {
+        $lookup: {
+          from:"booked_rooms",
+          localField:"room_id",
+          foreignField: "id",
+          as: "booking_details"
+        }
+      },
+      {
+        $unwind: "$booking_details"
+      },
+      {
+        $project : {
+          _id: 0,
+          "room_no" : "$_id",
+          "room_name": "$room_name",
+          "booking_status":"$booking_status",
+          "customer_name": "$booking_details.customer_name",
+          "booking_date" : "$booking_details.booking_date",
+          "start_time" : "$booking_details.start_time",
+          "end_time":"$booking_details.end_time"
+        }
+      }
+    ]
+
+    const roomsFromDB = await client.db("hallbooking").collection("rooms").aggregate(query).toArray();
+    
+    response.send(roomsFromDB);
+})
+
+
+app.get("/listAllCustomers", async function(request, response) {
+    
+    let query = [
+      {
+        $addFields : { match_id: { $toString: "$_id" } }
+      },
+      {
+        $lookup: {
+          from:"booked_rooms",
+          localField:"match_id",
+          foreignField: "id",
+          as: "booking_details"
+        }
+      },
+      {
+        $unwind: "$booking_details"
+      },
+      {
+        $project : {
+          _id: 0,
+          "customer_name": "$booking_details.customer_name",
+          "room_name": "$room_name",
+          "booking_date" : "$booking_details.booking_date",
+          "start_time" : "$booking_details.start_time",
+          "end_time":"$booking_details.end_time"
+        }
+      }
+    ]
+
+    const customersFromDB = await client.db("hallbooking").collection("rooms").aggregate(query).toArray();
+    
+    response.send(customersFromDB);
+})
+
+// api to book rooms
+// app.post("/bookroom", async function ( request, response) {
+//   const data = request.body
+//   const { id, start_time, end_time, booking_date} = request.body;
+//   data.booking_date = new Date(booking_date);
+//   data.start_time = new Date(booking_date + "T" + start_time + ":00.000Z");
+//   data.end_time = new Date(booking_date + "T" + end_time + ":00.000Z");
+//   data.booking_status = "booked";
+
+//   let isroombooked = await client.db("hallbooking")
+//                                  .collection("booked_rooms")
+//                                  .find({
+//                                     $and : [
+//                                       {
+//                                         $or : [
+//                                           {
+//                                             $and : [
+//                                               { start_time : { $lte : new Date(data.start_time)}},
+//                                               { end_time : { $gte : new Date(data.start_time)}}
+//                                             ]
+//                                           },
+//                                           {
+//                                             $and : [
+//                                               { start_time : { $lte : new Date(data.end_time)}},
+//                                               { end_time : { $gte : new Date(data.end_time)}}
+//                                             ]
+//                                           }
+//                                         ]
+//                                       },
+//                                       { id : id }
+//                                     ]
+//                                  }).toArray()
+
+//   if(isroombooked === 0){
+//     let result = await client
+//                        .db("hallbooking")
+//                        .collection("booked_rooms")
+//                        .insertOne(data)
+
+//     let updateresult = await client 
+//                               .db("hallbooking")
+//                               .collection("rooms")
+//                               .updateOne(
+//                                 { _id : ObjectId(id)},
+//                                 { $set : { booking_status : "Booked"}}
+//                               )
+//     response.send(result);
+//   }else {
+//     response.status(400).send("Room has been booked for this time slot.");
+//   }
+// });
 
 app.listen(PORT, () => console.log(`The server started in: ${PORT} ✨✨`));
