@@ -1,5 +1,5 @@
 import express from "express";
-import { MongoClient, MongoServerError, ObjectId } from "mongodb";
+import { MongoClient, ObjectId } from "mongodb";
 import * as dotenv from 'dotenv';
 dotenv.config()
 
@@ -22,136 +22,205 @@ app.use(express.json());
 
 // home page
 app.get("/", function (request, response) {
-  response.send("Hall Booking App is running");
+  response.send("App is running");
 });
 
-// api to create rooms
-app.post("/createRoom", async function (request, response) {
-    const data = request.body;
-    const { seats_available, amenities, room_name, price } = request.body;
-
-    if(!seats_available || !amenities || !room_name || !price) {
-      response.status(400).send("Kindly enter all the required details properly");
-    } else {
-      const result = await client.db("hallbooking").collection("rooms").insertOne(data);
-      response.send(result); 
-    }
+//create mentor
+app.post("/createMentor", async function (request, response) {
+  const { mentor_name } = request.body;
+  
+  const data = {
+    "mentor_name" : mentor_name,
+    "student_id" : [],
+    "student_assigned" : false 
+  }
+  
+  const result = await client.db("Zendatabase").collection("mentors").insertOne(data);
+  
+  response.send(result);
 });
 
+//create student
+app.post("/createStudent", async function (request, response) {
+  const { student_name } = request.body;
+  
+  const data = {
+    "student_name" : student_name,
+    "mentor_name": "",
+    "mentor_id" : "",
+    "mentor_assigned" : false
+  }
+  const result = await client.db("Zendatabase").collection("students").insertOne(data);
+  response.send(result);
+});
 
-app.post("/bookRoom", async function (request, response) {
-    const data = request.body
-    const { id, start_time, end_time, booking_date } = request.body
+//assigning students to the mentor
+app.put("/assignMentor", async function (request, response) {
+  const { mentor_name, students } = request.body;
+  
+  const mentorFromDB = await client.db("Zendatabase").collection("mentors").findOne({ "mentor_name" : mentor_name  })
 
-    const checkRoom = await client.db("hallbooking")
-                              .collection("booked_rooms")
-                              .find({
-                                $and:[
-                                  {"id" : id},
-                                  {"booking_date" : booking_date},
-                                  {
-                                    $or:[
+  const studentsList = [];
+  let initialMenteeCount = 0;
+
+  if(mentorFromDB.student_assigned === true){
+      initialMenteeCount = mentorFromDB.student_id.length;
+      mentorFromDB.student_id.map( (stud_id ) => studentsList.push(stud_id) )
+  }
+
+  for(let i=0; i<students.length; i++){
+    const studentName = students[i];
+    console.log(studentName)
+    const studentFromDB = await client.db("Zendatabase").collection("students").findOne({ "student_name" : studentName  })
+    console.log(studentFromDB);
+
+    if(studentFromDB.mentor_assigned === false ){
+       const data = await client.db("Zendatabase")
+                                .collection("students")
+                                .updateOne(
+                                  { 
+                                    "student_name" : studentName 
+                                  },
+                                  { 
+                                    $set : 
                                       {
-                                        $and:[
-                                          { start_time : { $lte: start_time }},
-                                          { end_time : { $gte: start_time }}
-                                        ]
-                                      },
-                                      {
-                                        $and:[
-                                          { start_time: { $lte: end_time} },
-                                          { end_time: { $gte: end_time} }
-                                        ]
+                                        "mentor_name" : mentorFromDB.mentor_name,
+                                        "mentor_id" : mentorFromDB._id,
+                                        "mentor_assigned" : true
                                       }
-                                    ]
                                   }
-                                ]
-                              }).toArray();
-
-    if(checkRoom.length === 0){
-    const result = await client.db("hallbooking").collection("booked_rooms").insertOne(data);
-
-    const updatedResult = await client.db("hallbooking")
-                                .collection("rooms")
-                                .updateOne({ _id:ObjectId(id) },{$set:{booking_status : "booked"}});
-
-    response.send(result)
-    }else{
-      response.status(400).send("room already booked for this slot")
+                                )
+      studentsList.push(studentFromDB._id);
     }
-})
+  }
 
+  if((studentsList.length - initialMenteeCount) > 0){
+    const res = await client.db("Zendatabase")
+                            .collection("mentors")
+                            .updateOne(
+                              {"mentor_name" : mentor_name},
+                              { $set : {
+                                "student_id": studentsList,
+                                "student_assigned": true
+                              }}
+                            )
+    response.send("Mentor have assigned for the students")
+  }else{
+    response.send("Students already have an mentor")
+  }  
+});
 
-app.get("/listAllRooms", async function(request, response) {
+// to change mentor for a student
+app.put("/changeMentor", async function (request, response) {
+  const {mentor_name, student_name} = request.body;
+  
+  const mentorFromDB = await client.db("Zendatabase")
+                                   .collection("mentors")
+                                   .findOne({ "mentor_name" : mentor_name })
+
+  const studentFromDB = await client.db("Zendatabase")
+                                   .collection("students")
+                                   .findOne({ "student_name" : student_name })
+   
+  let sameMentorCheck = mentorFromDB.student_id.filter((std_id)=>{
+    if(String(std_id) === String(studentFromDB._id)){
+      return std_id;
+    }
+  })
+
+  if(sameMentorCheck.length > 0){
+    response.send("Student is already assigned to the same mentor");
+  }else{
+    let flag=0;
     
-    let query = [
-      {
-        $addFields : { room_id: { $toString: "$_id" } }
-      },
-      {
-        $lookup: {
-          from:"booked_rooms",
-          localField:"room_id",
-          foreignField: "id",
-          as: "booking_details"
-        }
-      },
-      {
-        $unwind: "$booking_details"
-      },
-      {
-        $project : {
-          _id: 0,
-          "room_no" : "$_id",
-          "room_name": "$room_name",
-          "booking_status":"$booking_status",
-          "customer_name": "$booking_details.customer_name",
-          "booking_date" : "$booking_details.booking_date",
-          "start_time" : "$booking_details.start_time",
-          "end_time":"$booking_details.end_time"
-        }
+    if(studentFromDB.mentor_assigned === true){
+      let oldMentorStudentList = [];
+      const oldMentorFromDB = await client.db("Zendatabase")
+                                   .collection("mentors")
+                                   .findOne({ "mentor_name" : studentFromDB.mentor_name })
+
+      if(oldMentorFromDB.student_id.length > 1){
+          oldMentorStudentList = oldMentorFromDB.student_id;
+          oldMentorStudentList = oldMentorStudentList.filter((std_id)=>{
+             if(String(std_id) !== String(studentFromDB._id)){
+              return std_id;
+             }
+          })
+        const res = await client.db("Zendatabase")
+                                .collection("mentors")
+                                .updateOne(
+                                  { "mentor_name" : oldMentorFromDB.mentor_name},
+                                  { $set : { "student_id" :oldMentorStudentList }}
+                                )
+      }else{
+        const res = await client.db("Zendatabase")
+                                .collection("mentors")
+                                .updateOne(
+                                  { "mentor_name" : oldMentorFromDB.mentor_name},
+                                  { $set : { "student_id" : [] ,"student_assigned" : false }}
+                                )
       }
-    ]
 
-    const roomsFromDB = await client.db("hallbooking").collection("rooms").aggregate(query).toArray();
-    
-    response.send(roomsFromDB);
-})
+      flag = 1;
+    }
+    const studentList = [];
 
+    if(mentorFromDB.student_assigned === true){
+      mentorFromDB.student_id.map((stud_id) => studentList.push(stud_id))
+    }
 
-app.get("/listAllCustomers", async function(request, response) {
-    
-    let query = [
-      {
-        $addFields : { match_id: { $toString: "$_id" } }
-      },
-      {
-        $lookup: {
-          from:"booked_rooms",
-          localField:"match_id",
-          foreignField: "id",
-          as: "booking_details"
-        }
-      },
-      {
-        $unwind: "$booking_details"
-      },
-      {
-        $project : {
-          _id: 0,
-          "customer_name": "$booking_details.customer_name",
-          "room_name": "$room_name",
-          "booking_date" : "$booking_details.booking_date",
-          "start_time" : "$booking_details.start_time",
-          "end_time":"$booking_details.end_time"
-        }
-      }
-    ]
+    const result = await client.db("Zendatabase")
+                                .collection("mentors")
+                                .updateOne(
+                                  { "mentor_name" : mentor_name},
+                                  { $set : { "student_id" : studentList,"student_assigned" : true }}
+                                )
 
-    const customersFromDB = await client.db("hallbooking").collection("rooms").aggregate(query).toArray();
-    
-    response.send(customersFromDB);
-})
+    const result3 = await client.db("Zendatabase")
+                                .collection("students")
+                                .updateOne(
+                                  { "student_name" : student_name},
+                                  { $set : 
+                                    { "mentor_id" : mentorFromDB._id,
+                                      "mentor_name" : mentorFromDB.mentor_name,
+                                      "menotor_assigned" : true 
+                                    }
+                                  }
+                                )
+
+    if(flag === 1) {
+      response.send("Mentor changed for the student")
+    }else{
+      response.send("Mentor assigned for the student")
+    }
+  }
+
+});
+
+// to get all the students 
+app.get("/getAllStudents/:mentorName", async function (request, response) {
+  const {mentorName} = request.params
+  const mentorFromDB = await client.db("Zendatabase")
+                              .collection("mentors")
+                              .findOne({"mentor_name": mentorName})
+
+  const studentsList = mentorFromDB.student_id;
+  
+  if(studentsList.length > 0){
+    let students_name = [];
+    for(let i=0; i<studentsList.length; i++){
+      const studentFromDB = await client.db("Zendatabase")
+                                   .collection("students")
+                                   .findOne({ "_id" : ObjectId(studentsList[i]) });
+     
+      students_name.push(studentFromDB.student_name)
+    }
+    students_name = students_name.join(",");
+    response.send(`students of ${mentorName} are ${students_name}`)
+  }else{
+    response.send(`${mentorName} has no students`)
+  }
+});
 
 
 app.listen(PORT, () => console.log(`The server started in: ${PORT} ✨✨`));
