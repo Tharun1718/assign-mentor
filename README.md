@@ -1,18 +1,25 @@
-#Create Rooms
-1.Sample Request
+1. To create a mentor
+
 {
-    "seats_available": 3,
-    "amenities": "Fridge, Ac, TV",
-    "room_name": "Super Delux",
-    "price": "3500"
+    "mentor_name" : "Divya"
 }
 
+2.To create a student
 
-2.Sample Request (Book Rooms)
-{ 
-    "customer_name": "Rahul", 
-    "booking_date": "2022-11-18",
-    "start_time": "11.30", 
-    "end_time": "12.30",
-    "id": "638e03aa57c5e7e41e3e6a29"
+{
+   "student_name" : "Nandhini"
 }
+
+3.To Assign mentor to students
+
+{
+    "mentor_name" : "Poonam",
+    "students" : ["Nandhini","Rahul"]
+}
+
+4.To change mentor
+{
+    "mentor_name" : "Poonam",
+    "student_name" : "Sanjana"
+}
+
